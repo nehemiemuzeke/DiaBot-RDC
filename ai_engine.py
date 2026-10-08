@@ -132,7 +132,7 @@ class ConversationEngine:
         self._histories: dict[str, list[MessageIA]] = {}
         self._max_history = LLM.HISTORY_WINDOW
 
-        logger.info(f"💬 ConversationEngine initialisé (modèle local de secours: {self.model_name})")
+        logger.info(f"💬 ConversationEngine initialisé")
 
     def load_model(self) -> bool:
         """Tentative de chargement du modèle local (optionnel si Cloud disponible)."""
@@ -146,7 +146,7 @@ class ConversationEngine:
             self.model_loaded = True
             return True
         except Exception:
-            logger.info("ℹ️ Modèle local non chargé. Le système privilégiera l'API Cloud (Groq/HuggingFace).")
+            logger.info("ℹ️ Modèle local non chargé. Utilisation de l'API Cloud (Groq).")
             return False
 
     def load_rag_knowledge(self) -> int:
@@ -164,7 +164,7 @@ class ConversationEngine:
 
         self._load_builtin_knowledge()
 
-        # Hugging Face Datasets
+        # Hugging Face Datasets (chargement optionnel)
         try:
             from hf_connector import hf_connector
             hf_data = hf_connector.load_medical_dataset("medalpaca/medical_meadow_wikidoc", split="train[:50]")
@@ -172,7 +172,7 @@ class ConversationEngine:
                 self.knowledge_base[f"hf_doc_{idx}"] = item["content"]
             logger.info(f"🤗 Hugging Face : {len(hf_data)} documents médicaux ajoutés au RAG")
         except Exception as e:
-            logger.warning(f"⚠️ Dataset HF non chargé : {e}")
+            logger.debug(f"HF Dataset non disponible: {e}")
 
         logger.info(f"📚 Base RAG totale : {len(self.knowledge_base)} documents chargés")
         return len(self.knowledge_base)
@@ -235,17 +235,13 @@ NUTRITION EN RDC :
         if context_glycemique:
             system_prompt += f"\n\nGLYCÉMIE PATIENT : {json.dumps(context_glycemique)}"
 
-        # 3. Appel au LLM Cloud (Groq / HuggingFace)
+        # 3. Appel au LLM Cloud (Groq)
         response_text, model_used = self._generate_cloud_llm(system_prompt, messages)
 
         # 4. Fallback de secours
         if not response_text:
-            if self.model_loaded and self.model:
-                response_text = self._generate_llm(system_prompt, messages, langue)
-                model_used = "Local-LLM"
-            else:
-                response_text = self._generate_template(user_message, mode, langue, context_glycemique)
-                model_used = "Template-Fallback"
+            response_text = self._generate_template(user_message, mode, langue, context_glycemique)
+            model_used = "Template-Fallback"
 
         # 5. Guardrails
         guardrails = self._apply_guardrails(response_text, user_message)
@@ -266,24 +262,24 @@ NUTRITION EN RDC :
         )
 
     def _generate_cloud_llm(self, system_prompt: str, messages: list[MessageIA]) -> tuple[str, str]:
-        """Inférence via Groq Cloud avec les modèles de Chat validés."""
+        """Inférence via Groq Cloud avec les modèles actifs."""
         groq_key = os.getenv("GROQ_API_KEY")
         if groq_key:
             try:
                 from groq import Groq
                 client = Groq(api_key=groq_key)
-                
+
                 formatted_messages = [{"role": "system", "content": system_prompt}]
                 for msg in messages[-8:]:
                     role_name = "user" if msg.role == "user" else "assistant"
                     formatted_messages.append({"role": role_name, "content": msg.content})
 
-                # Modèles de Chat actifs sur votre compte Groq
+                # Modèles de Chat officiels et actifs sur Groq Cloud
                 chat_models = [
-                    "openai/gpt-oss-120b",
-                    "openai/gpt-oss-20b",
-                    "qwen/qwen3.8-27b",
-                    "allam-2-7b"
+                    "llama-3.3-70b-versatile",
+                    "llama-3.1-8b-instant",
+                    "mixtral-8x7b-32768",
+                    "gemma2-9b-it",
                 ]
 
                 for model_id in chat_models:
@@ -307,16 +303,26 @@ NUTRITION EN RDC :
 
         return "", ""
 
-    def _generate_llm(self, system_prompt: str, messages: list[MessageIA], langue: str) -> str:
-        """Inférence locale secours."""
-        return ""
-
     def _generate_template(self, user_message: str, mode: ModeIA, langue: str, context: Optional[dict[str, Any]] = None) -> str:
-        """Mode dégradé ultime."""
+        """Mode dégradé ultime (sans API Key)."""
         msg_lower = user_message.lower()
-        if "urgence" in msg_lower or "malaise" in msg_lower:
-            return "🚨 URGENCE MÉDICALE : Prenez du sucre immédiat si glycémie basse ou appelez le 112."
-        return "Bonjour ! Je suis DiaBot-RDC. Comment puis-je vous aider aujourd'hui concernant votre diabète ?"
+        if "fufu" in msg_lower or "repas" in msg_lower or "manger" in msg_lower:
+            return (
+                "En cas de diabète, le fufu contient beaucoup de glucides. "
+                "Il est conseillé de réduire la portion et de l'accompagner de beaucoup de légumes "
+                "(pondu, ndunda) et de protéines (poisson, poulet)."
+            )
+        elif "hypo" in msg_lower or "sucre" in msg_lower or "malaise" in msg_lower:
+            return (
+                "🚨 En cas d'hypoglycémie (glycémie < 0.70 g/L) : prenez immédiatement 15g de sucre rapide "
+                "(3 morceaux de sucre ou demi-verre de jus), attendez 15 minutes et recontrôlez."
+            )
+        elif "glycemie" in msg_lower or "surveiller" in msg_lower:
+            return (
+                "Pour surveiller votre glycémie : mesurez à jeun le matin (objectif 0.80 - 1.30 g/L) "
+                "et 2h après les repas (objectif < 1.80 g/L)."
+            )
+        return "Bonjour ! Je suis DiaBot-RDC. Comment puis-je vous aider aujourd'hui concernant votre suivi du diabète ?"
 
     def _apply_guardrails(self, response: str, user_message: str) -> dict[str, Any]:
         flags = []
@@ -325,7 +331,7 @@ NUTRITION EN RDC :
             flags.append("prescription_detected")
             return {
                 "blocked": True,
-                "replacement": "En tant qu'assistant IA, je ne peux pas modifier vos doses ou prescrire de traitement. Veuillez consulter votre médecin.",
+                "replacement": "En tant qu'assistant IA, je ne peux pas modifier vos doses ou prescrire de traitement. Veuillez consulter votre médecin traitant.",
                 "flags": flags
             }
         return {"blocked": False, "replacement": response, "flags": flags}
@@ -461,7 +467,7 @@ class DiaBot:
     async def initialize(self) -> dict[str, bool]:
         logger.info("🔄 Chargement des sous-systèmes IA...")
         status = {
-            "llm": True,  # Via Groq Cloud
+            "llm": True,
             "rag": self.conversation.load_rag_knowledge() > 0,
             "vision": self.vision.load_model(),
             "stt": self.audio.load_stt(),
@@ -502,7 +508,7 @@ class DiaBot:
             "initialized": self._initialized,
             "mode": self._mode.value,
             "llm_loaded": True,
-            "llm_model": "Groq (openai/gpt-oss-120b)",
+            "llm_model": "Groq Cloud / Fallback",
             "vision_loaded": self.vision.model_loaded,
             "stt_loaded": self.audio.stt_loaded,
             "tts_loaded": self.audio.tts_loaded,
