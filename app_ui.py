@@ -9,7 +9,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-API_URL = "http://localhost:8000/api/v1"
+API_URL = "https://diabot-api.onrender.com"
 CHAT_ENDPOINT = f"{API_URL}/ia/chat"
 
 LANGUAGES = {
