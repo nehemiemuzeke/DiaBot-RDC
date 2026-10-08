@@ -9,8 +9,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Remplacez si votre URL Render exacte est différente
-API_URL = "https://diabot-api.onrender.com/api/v1"
+# ⚠️ REMPLACEZ PAR VOTRE URL RENDER EXACTE SI DIFFÉRENTE
+API_URL = "https://diabot-api.onrender.com"
 CHAT_ENDPOINT = f"{API_URL}/ia/chat"
 
 LANGUAGES = {
@@ -261,38 +261,28 @@ for k, v in defaults.items():
 def login(username: str, password: str):
     url = f"{API_URL}/auth/login"
 
-    # Timeout de 60 secondes pour laisser le temps au serveur Render de sortir de veille
-    # 1) JSON
     try:
-        r = requests.post(url, json={"username": username, "password": password}, timeout=60)
+        # Envoi JSON direct avec timeout de 35s
+        r = requests.post(url, json={"username": username, "password": password}, timeout=35)
         if r.status_code in (200, 201):
             data = r.json()
             token = data.get("access_token") or data.get("token")
             if token:
                 return True, token, None
+            return False, None, "Format de token invalide."
+        elif r.status_code in (400, 401, 422):
+            return False, None, "Nom d'utilisateur ou mot de passe incorrect."
+        else:
+            return False, None, f"Erreur API ({r.status_code})"
+    except requests.exceptions.Timeout:
+        return False, None, "Le serveur Render se réveille encore. Veuillez recliquer sur Se connecter dans 10 secondes !"
     except requests.exceptions.ConnectionError:
-        return False, None, "Serveur inaccessible. Vérifiez le backend Render."
-    except requests.exceptions.Timeout:
-        return False, None, "Le serveur Render met du temps à se réveiller. Réessayez dans quelques secondes."
-    except Exception as e:
-        pass
-
-    # 2) Form-data (OAuth2 FastAPI)
-    try:
-        r = requests.post(url, data={"username": username, "password": password}, timeout=60)
-        if r.status_code in (200, 201):
-            data = r.json()
-            token = data.get("access_token") or data.get("token")
-            if token:
-                return True, token, None
-        return False, None, f"Identifiants incorrects (Code {r.status_code})."
-    except requests.exceptions.Timeout:
-        return False, None, "Délai d'attente dépassé (60s). Le serveur se réveille, réessayez !"
+        return False, None, "Impossible de joindre le serveur. Vérifiez l'URL Render."
     except Exception as e:
         return False, None, f"Erreur : {e}"
 
 
-# Splash (une seule fois)
+# Splash
 if not st.session_state.splash_done and not st.session_state.token:
     st.markdown(
         f"""
@@ -311,7 +301,7 @@ if not st.session_state.splash_done and not st.session_state.token:
     st.rerun()
 
 
-# Sidebar (connecté)
+# Sidebar
 if st.session_state.token:
     with st.sidebar:
         st.markdown(
@@ -386,7 +376,7 @@ if not st.session_state.token:
             if not username or not password:
                 st.error("Veuillez remplir tous les champs.")
             else:
-                with st.spinner("Connexion au serveur (réveil Render en cours)..."):
+                with st.spinner("Connexion en cours..."):
                     ok, token, err = login(username.strip(), password)
                 if ok:
                     st.session_state.token = token
@@ -471,7 +461,7 @@ else:
                 CHAT_ENDPOINT,
                 json={"message": prompt, "langue": st.session_state.langue},
                 headers={"Authorization": f"Bearer {st.session_state.token}"},
-                timeout=60,
+                timeout=45,
             )
             if res.status_code in (200, 201):
                 data = res.json()
