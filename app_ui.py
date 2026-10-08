@@ -9,9 +9,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ⚠️ REMPLACEZ PAR VOTRE URL RENDER EXACTE SI DIFFÉRENTE
-API_URL = "https://diabot-api.onrender.com"
-CHAT_ENDPOINT = f"{API_URL}/ia/chat"
+# Base URL Render
+RENDER_BASE_URL = "https://diabot-api.onrender.com"
 
 LANGUAGES = {
     "Français": "fr",
@@ -252,6 +251,7 @@ defaults = {
     "langue": "fr",
     "splash_done": False,
     "pending_prompt": None,
+    "working_prefix": "/api/v1",
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -259,27 +259,40 @@ for k, v in defaults.items():
 
 
 def login(username: str, password: str):
-    url = f"{API_URL}/auth/login"
+    # Teste automatiquement /api/v1/auth/login ET /auth/login
+    prefixes = ["/api/v1", ""]
+    base = RENDER_BASE_URL.rstrip("/")
 
-    try:
-        # Envoi JSON direct avec timeout de 35s
-        r = requests.post(url, json={"username": username, "password": password}, timeout=35)
-        if r.status_code in (200, 201):
-            data = r.json()
-            token = data.get("access_token") or data.get("token")
-            if token:
-                return True, token, None
-            return False, None, "Format de token invalide."
-        elif r.status_code in (400, 401, 422):
-            return False, None, "Nom d'utilisateur ou mot de passe incorrect."
-        else:
-            return False, None, f"Erreur API ({r.status_code})"
-    except requests.exceptions.Timeout:
-        return False, None, "Le serveur Render se réveille encore. Veuillez recliquer sur Se connecter dans 10 secondes !"
-    except requests.exceptions.ConnectionError:
-        return False, None, "Impossible de joindre le serveur. Vérifiez l'URL Render."
-    except Exception as e:
-        return False, None, f"Erreur : {e}"
+    for prefix in prefixes:
+        url = f"{base}{prefix}/auth/login"
+        try:
+            # Essai JSON
+            r = requests.post(url, json={"username": username, "password": password}, timeout=25)
+            if r.status_code in (200, 201):
+                data = r.json()
+                token = data.get("access_token") or data.get("token")
+                if token:
+                    st.session_state.working_prefix = prefix
+                    return True, token, None
+            elif r.status_code in (400, 401, 422):
+                return False, None, "Nom d'utilisateur ou mot de passe incorrect."
+
+            # Essai Form-Data
+            r = requests.post(url, data={"username": username, "password": password}, timeout=25)
+            if r.status_code in (200, 201):
+                data = r.json()
+                token = data.get("access_token") or data.get("token")
+                if token:
+                    st.session_state.working_prefix = prefix
+                    return True, token, None
+        except requests.exceptions.Timeout:
+            return False, None, "Le serveur Render se réveille encore. Veuillez recliquer sur Se connecter dans 10 secondes !"
+        except requests.exceptions.ConnectionError:
+            return False, None, "Impossible de joindre le serveur. Vérifiez l'URL Render."
+        except Exception:
+            pass
+
+    return False, None, "Erreur API : Impossible de trouver la route de connexion."
 
 
 # Splash
@@ -456,9 +469,11 @@ else:
         box.markdown(thinking, unsafe_allow_html=True)
 
         reply = "Je n'ai pas pu obtenir de réponse."
+        chat_url = f"{RENDER_BASE_URL.rstrip('/')}{st.session_state.working_prefix}/ia/chat"
+
         try:
             res = requests.post(
-                CHAT_ENDPOINT,
+                chat_url,
                 json={"message": prompt, "langue": st.session_state.langue},
                 headers={"Authorization": f"Bearer {st.session_state.token}"},
                 timeout=45,
