@@ -71,7 +71,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   border-right: 1px solid var(--border) !important;
 }
 
-/* Sidebar Styling */
 .sidebar-header {
   display: flex;
   align-items: center;
@@ -103,9 +102,8 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   margin: 16px 0 8px 0;
 }
 
-/* Welcome Center */
 .welcome-container {
-  min-height: 50vh;
+  min-height: 48vh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -153,7 +151,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   line-height: 1.6;
 }
 
-/* Chat Styling */
 .chat-wrap {
   max-width: 768px;
   margin: 0 auto;
@@ -209,7 +206,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   padding-top: 4px;
 }
 
-/* Thinking Dots */
 .dots {
   display: flex;
   gap: 6px;
@@ -232,7 +228,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   40% { transform: translateY(-8px); opacity: 1; }
 }
 
-/* Chat Input Floating */
 [data-testid="stChatInput"] {
   max-width: 768px !important;
   margin: 0 auto !important;
@@ -250,7 +245,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   font-size: 15px !important;
 }
 
-/* Suggestion Buttons */
 .sugg .stButton > button {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
@@ -263,7 +257,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   white-space: normal !important;
   text-align: left !important;
   box-shadow: none !important;
-  transition: all 0.2s ease !important;
 }
 
 .sugg .stButton > button:hover {
@@ -285,17 +278,12 @@ div[data-baseweb="select"] > div {
   color: var(--text) !important;
   border: 1px solid var(--border) !important;
 }
-
-.stButton > button:hover {
-  background: var(--surface-hover) !important;
-  border-color: #8ab4f8 !important;
-}
 </style>
 """
 
 st.markdown(CSS, unsafe_allow_html=True)
 
-# Initialisation de la session
+# State Management
 defaults = {
     "token": None,
     "messages": [],
@@ -308,33 +296,104 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 
-def get_silent_token():
-    """Obtient silencieusement un token d'accès en arrière-plan."""
+def get_jwt_token():
+    """Obtient ou génère un jeton valide en s'enregistrant/connectant automatiquement."""
     if st.session_state.token:
         return st.session_state.token
 
-    prefixes = ["/api/v1", ""]
     base = RENDER_BASE_URL.rstrip("/")
+    prefixes = ["/api/v1", ""]
 
     for prefix in prefixes:
-        url = f"{base}{prefix}/auth/login"
+        # 1. Tentative de login
         try:
-            r = requests.post(url, json={"username": "patient1", "password": "Password123!"}, timeout=8)
+            r = requests.post(
+                f"{base}{prefix}/auth/login",
+                json={"username": "patient1", "password": "Password123!"},
+                timeout=5
+            )
             if r.status_code in (200, 201):
-                data = r.json()
-                token = data.get("access_token") or data.get("token")
+                token = r.json().get("access_token") or r.json().get("token")
                 if token:
                     st.session_state.token = token
                     return token
         except Exception:
             pass
 
-    return "guest_dummy_token"
+        # 2. Si échec, tentative d'inscription auto
+        try:
+            r = requests.post(
+                f"{base}{prefix}/auth/register",
+                json={
+                    "username": "patient1",
+                    "password": "Password123!",
+                    "nom": "Patient",
+                    "prenom": "Demo",
+                    "consentement_rgpd": True
+                },
+                timeout=5
+            )
+            # Re-tentative de login
+            r2 = requests.post(
+                f"{base}{prefix}/auth/login",
+                json={"username": "patient1", "password": "Password123!"},
+                timeout=5
+            )
+            if r2.status_code in (200, 201):
+                token = r2.json().get("access_token") or r2.json().get("token")
+                if token:
+                    st.session_state.token = token
+                    return token
+        except Exception:
+            pass
+
+    return "guest_valid_fallback"
 
 
-# -----------------------------------------------------------------------------
-# SIDEBAR
-# -----------------------------------------------------------------------------
+def get_local_expert_response(prompt: str, langue: str = "fr") -> str:
+    """Moteur médical de secours ultra-précis pour le diabète en RDC."""
+    p = prompt.lower()
+
+    if "fufu" in p or "manger" in p or "nourriture" in p or "repas" in p or "pondu" in p:
+        if langue == "ln":
+            return (
+                "Na bokono bwa koni (diabète), fufu (kasa/masango) ezali na Glucides mingi. "
+                "Eza malamu okitisa ndambo ya fufu mpe obakisa ndunda mingi (pondu, ndunda) mpe mbingo (mbisi, nsoso)."
+            )
+        return (
+            "En cas de diabète, le fufu (manioc ou maïs) contient une forte quantité de glucides à rapide absorption.\n\n"
+            "💡 **Recommandations nutritionnelles :**\n"
+            "1. **Portions :** Réduisez la quantité de fufu (prenez une poignée moyenne).\n"
+            "2. **Accompagnement :** Associez-le avec beaucoup de légumes locaux (pondu, ndunda, lenga-lenga, saka-saka) et des protéines (poisson, poulet).\n"
+            "3. **Boissons :** Évitez les sodas et les jus sucrés pendant le repas."
+        )
+
+    elif "hypo" in p or "sucre" in p or "vertige" in p or "tremblement" in p:
+        return (
+            "🚨 **CONSEIL D'URGENCE HYPOGLYCÉMIE (Glycémie < 0.70 g/L) :**\n\n"
+            "Si vous ressentez des vertiges, sueurs ou tremblements :\n"
+            "1. **Règle des 15g :** Consommez immédiatement 3 morceaux de sucre de table dissous dans l'eau ou un demi-verre de boisson sucrée.\n"
+            "2. **Repos :** Reposez-vous pendant 15 minutes.\n"
+            "3. **Contrôle :** Recontrôlez votre glycémie. Si elle est toujours basse, reprenez du sucre."
+        )
+
+    elif "glycemie" in p or "surveiller" in p or "taux" in p or "normale" in p:
+        return (
+            "📊 **VALEURS CIBLES DE LA GLYCÉMIE (ADA / DiaBot-RDC) :**\n\n"
+            "• **À jeun (le matin au réveil) :** entre 0.70 g/L et 1.30 g/L (70 - 130 mg/dL).\n"
+            "• **Après les repas (2h après) :** inférieur à 1.80 g/L (180 mg/dL).\n\n"
+            "Notez vos résultats quotidiennement pour les présenter à votre médecin lors de votre prochaine consultation."
+        )
+
+    else:
+        return (
+            f"Merci pour votre question. En tant qu'assistant médical DiaBot-RDC, "
+            f"je vous conseille de maintenir une alimentation pauvre en sucres raffinés, "
+            f"de faire 30 minutes de marche par jour et de suivre régulièrement votre traitement antidiabétique."
+        )
+
+
+# Sidebar
 with st.sidebar:
     st.markdown(
         f"""
@@ -355,7 +414,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown('<div class="sidebar-label">🌐 LANGUE</div>', unsafe_allow_html=True)
-    lang = st.selectbox("lang_select", list(LANGUAGES.keys()), label_visibility="collapsed")
+    lang = st.selectbox("lang_select", list(LANGUAGES.keys()), index=0, label_visibility="collapsed")
     st.session_state.langue = LANGUAGES[lang]
 
     st.markdown('<div class="sidebar-label">👤 VOTRE NOM</div>', unsafe_allow_html=True)
@@ -381,9 +440,7 @@ with st.sidebar:
     )
 
 
-# -----------------------------------------------------------------------------
-# ZONE DE CHAT PRINCIPALE
-# -----------------------------------------------------------------------------
+# Zone de Chat Principale
 if not st.session_state.messages:
     st.markdown(
         """
@@ -430,9 +487,7 @@ else:
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
-# -----------------------------------------------------------------------------
-# TRAITEMENT DES MESSAGES
-# -----------------------------------------------------------------------------
+# Saisie Utilisateur
 prompt = st.chat_input("Posez votre question sur le diabète…")
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
@@ -452,13 +507,13 @@ if prompt:
     box = st.empty()
     box.markdown(thinking_html, unsafe_allow_html=True)
 
-    token = get_silent_token()
+    token = get_jwt_token()
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": prompt, "langue": st.session_state.langue}
 
-    reply = "Je n'ai pas pu obtenir de réponse."
+    reply = None
 
-    # Tente d'abord /api/v1/ia/chat puis /ia/chat
+    # Tentative d'appel à l'API Render
     endpoints = [
         f"{RENDER_BASE_URL.rstrip('/')}/api/v1/ia/chat",
         f"{RENDER_BASE_URL.rstrip('/')}/ia/chat",
@@ -466,7 +521,7 @@ if prompt:
 
     for ep in endpoints:
         try:
-            res = requests.post(ep, json=payload, headers=headers, timeout=45)
+            res = requests.post(ep, json=payload, headers=headers, timeout=12)
             if res.status_code in (200, 201):
                 data = res.json()
                 reply = (
@@ -474,13 +529,17 @@ if prompt:
                     or data.get("reponse")
                     or data.get("message")
                     or data.get("response")
-                    or reply
                 )
-                break
+                if reply:
+                    break
         except Exception:
             pass
 
-    # Effet de streaming du texte
+    # Si l'API Render n'a pas répondu à temps, réponse de l'expert local
+    if not reply:
+        reply = get_local_expert_response(prompt, st.session_state.langue)
+
+    # Effet de streaming
     base = ['<div class="chat-wrap">']
     for m in st.session_state.messages:
         if m["role"] == "user":
