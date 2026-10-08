@@ -9,7 +9,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-API_URL = "https://diabot-api.onrender.com"
+# Remplacez si votre URL Render exacte est différente
+API_URL = "https://diabot-api.onrender.com/api/v1"
 CHAT_ENDPOINT = f"{API_URL}/ia/chat"
 
 LANGUAGES = {
@@ -117,7 +118,7 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
 
 /* Login */
 .login-shell {
-  min-height: 92vh; display: flex; flex-direction: column;
+  min-height: 85vh; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   position: relative; padding: 24px 12px;
 }
@@ -243,9 +244,7 @@ div[data-baseweb="select"] > div {
 
 st.markdown(CSS, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
 # State
-# -----------------------------------------------------------------------------
 defaults = {
     "token": None,
     "messages": [],
@@ -262,38 +261,38 @@ for k, v in defaults.items():
 def login(username: str, password: str):
     url = f"{API_URL}/auth/login"
 
+    # Timeout de 60 secondes pour laisser le temps au serveur Render de sortir de veille
     # 1) JSON
     try:
-        r = requests.post(url, json={"username": username, "password": password}, timeout=12)
+        r = requests.post(url, json={"username": username, "password": password}, timeout=60)
         if r.status_code in (200, 201):
             data = r.json()
             token = data.get("access_token") or data.get("token")
             if token:
                 return True, token, None
-        json_err = f"Code {r.status_code}"
     except requests.exceptions.ConnectionError:
-        return False, None, "Serveur inaccessible. Lancez FastAPI sur le port 8000."
+        return False, None, "Serveur inaccessible. Vérifiez le backend Render."
+    except requests.exceptions.Timeout:
+        return False, None, "Le serveur Render met du temps à se réveiller. Réessayez dans quelques secondes."
     except Exception as e:
-        json_err = str(e)
+        pass
 
     # 2) Form-data (OAuth2 FastAPI)
     try:
-        r = requests.post(url, data={"username": username, "password": password}, timeout=12)
+        r = requests.post(url, data={"username": username, "password": password}, timeout=60)
         if r.status_code in (200, 201):
             data = r.json()
             token = data.get("access_token") or data.get("token")
             if token:
                 return True, token, None
-        return False, None, f"Identifiants incorrects ({r.status_code})."
-    except requests.exceptions.ConnectionError:
-        return False, None, "Serveur inaccessible. Lancez FastAPI sur le port 8000."
+        return False, None, f"Identifiants incorrects (Code {r.status_code})."
+    except requests.exceptions.Timeout:
+        return False, None, "Délai d'attente dépassé (60s). Le serveur se réveille, réessayez !"
     except Exception as e:
-        return False, None, f"Erreur de connexion: {e}"
+        return False, None, f"Erreur : {e}"
 
 
-# -----------------------------------------------------------------------------
 # Splash (une seule fois)
-# -----------------------------------------------------------------------------
 if not st.session_state.splash_done and not st.session_state.token:
     st.markdown(
         f"""
@@ -312,9 +311,7 @@ if not st.session_state.splash_done and not st.session_state.token:
     st.rerun()
 
 
-# -----------------------------------------------------------------------------
 # Sidebar (connecté)
-# -----------------------------------------------------------------------------
 if st.session_state.token:
     with st.sidebar:
         st.markdown(
@@ -360,9 +357,7 @@ if st.session_state.token:
             st.rerun()
 
 
-# -----------------------------------------------------------------------------
 # LOGIN
-# -----------------------------------------------------------------------------
 if not st.session_state.token:
     st.markdown(
         f"""
@@ -391,7 +386,8 @@ if not st.session_state.token:
             if not username or not password:
                 st.error("Veuillez remplir tous les champs.")
             else:
-                ok, token, err = login(username.strip(), password)
+                with st.spinner("Connexion au serveur (réveil Render en cours)..."):
+                    ok, token, err = login(username.strip(), password)
                 if ok:
                     st.session_state.token = token
                     st.session_state.username = username.strip()
@@ -406,9 +402,7 @@ if not st.session_state.token:
     st.markdown('<div class="foot">DiaBot-RDC · Données médicales sécurisées</div>', unsafe_allow_html=True)
 
 
-# -----------------------------------------------------------------------------
 # CHAT
-# -----------------------------------------------------------------------------
 else:
     if not st.session_state.messages:
         st.markdown(
@@ -477,7 +471,7 @@ else:
                 CHAT_ENDPOINT,
                 json={"message": prompt, "langue": st.session_state.langue},
                 headers={"Authorization": f"Bearer {st.session_state.token}"},
-                timeout=45,
+                timeout=60,
             )
             if res.status_code in (200, 201):
                 data = res.json()
@@ -493,13 +487,14 @@ else:
                 st.warning("Session expirée. Reconnectez-vous.")
                 st.rerun()
             else:
-                reply = f"Erreur API ({res.status_code}). Vérifiez le endpoint /ia/chat."
+                reply = f"Erreur API ({res.status_code})."
+        except requests.exceptions.Timeout:
+            reply = "Le serveur a mis trop de temps à répondre. Réessayez votre question."
         except requests.exceptions.ConnectionError:
-            reply = "Impossible de joindre l'API. Vérifiez que FastAPI tourne sur le port 8000."
+            reply = "Impossible de joindre l'API sur Render."
         except Exception as e:
             reply = f"Erreur: {e}"
 
-        # stream visuel
         base = ['<div class="chat-wrap">']
         for m in st.session_state.messages:
             if m["role"] == "user":
