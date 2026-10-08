@@ -1,0 +1,53 @@
+# DiaBot-RDC - Dependances Python
+# Python 3.11+
+
+# Framework API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic[email]==2.10.3
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+python-dotenv==1.0.1
+
+# Base de donnees
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+
+# Securite
+bcrypt==4.2.1
+PyJWT==2.10.1
+cryptography==44.0.0
+
+# IA / ML
+torch==2.5.1
+transformers==4.47.1
+accelerate==1.2.1
+bitsandbytes==0.45.0
+sentence-transformers==3.3.1
+chromadb==0.5.23
+peft==0.14.0
+safetensors==0.4.5
+tokenizers==0.21.0
+
+# Vision
+Pillow==11.0.0
+
+# Audio
+openai-whisper==20240930
+soundfile==0.12.1
+librosa==0.10.2.post1
+
+# Donnees
+pandas==2.2.3
+numpy==1.26.4
+openpyxl==3.1.5
+
+# Visualisations
+matplotlib==3.10.0
+qrcode[pil]==8.0
+
+# Utilitaires
+httpx==0.28.1
+aiofiles==24.1.0
+orjson==3.10.12
+tenacity==9.0.0
