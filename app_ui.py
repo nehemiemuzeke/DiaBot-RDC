@@ -1,5 +1,5 @@
 import streamlit as st
-import requests
+import os
 import time
 
 st.set_page_config(
@@ -9,8 +9,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-RENDER_BASE_URL = "https://diabot-api.onrender.com"
-
 LANGUAGES = {
     "Français": "fr",
     "Lingala": "ln",
@@ -18,6 +16,16 @@ LANGUAGES = {
     "Kikongo": "kg",
     "Tshiluba": "lu",
 }
+
+SYSTEM_PROMPT = """Tu es DiaBot-RDC, un assistant médical intelligent et chaleureux spécialisé dans la gestion du diabète en République Démocratique du Congo (RDC).
+
+DIRECTIVES STRICTES :
+1. Sois humain, empathique et naturel. Si l'utilisateur se présente (ex: "je m'appelle Néhémie"), salue-le chaleureusement par son prénom.
+2. Si la question concerne l'alimentation, adapte tes conseils au contexte congolais (fufu, pondu, saka-saka, madesu, chikwangue, bananes plantains, poisson).
+3. Donne des explications médicales claires, précises et simples à comprendre.
+4. En cas de symptômes graves ou d'hypoglycémie aiguë, rappelle la règle des 15g de sucre et recommande de consulter un médecin.
+5. Tu peux répondre en Français, Lingala, Swahili, Kikongo ou Tshiluba selon la langue choisie par l'utilisateur.
+"""
 
 SVG_LOGO = """<svg width="36" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
 <defs><linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -257,6 +265,7 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   white-space: normal !important;
   text-align: left !important;
   box-shadow: none !important;
+  transition: all 0.2s ease !important;
 }
 
 .sugg .stButton > button:hover {
@@ -265,7 +274,7 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   transform: translateY(-2px) !important;
 }
 
-div[data-baseweb="select"] > div {
+div[data-baseweb="select"] > div, .stTextInput input {
   background: var(--surface) !important;
   border-color: var(--border) !important;
   border-radius: 10px !important;
@@ -285,112 +294,57 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 # State Management
 defaults = {
-    "token": None,
     "messages": [],
     "username": "Patient",
     "langue": "fr",
     "pending_prompt": None,
+    "groq_api_key": os.getenv("GROQ_API_KEY", ""),
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 
-def get_jwt_token():
-    """Obtient ou génère un jeton valide en s'enregistrant/connectant automatiquement."""
-    if st.session_state.token:
-        return st.session_state.token
+def generate_groq_response(messages_history, user_langue, api_key):
+    """Inférence directe via le SDK Groq avec le modèle LLaMA 3.3-70B."""
+    if not api_key:
+        return "⚠️ Clé API Groq manquante. Veuillez entrer votre clé GROQ dans le menu de gauche (Sidebar)."
 
-    base = RENDER_BASE_URL.rstrip("/")
-    prefixes = ["/api/v1", ""]
+    try:
+        from groq import Groq
+        client = Groq(api_key=api_key)
 
-    for prefix in prefixes:
-        # 1. Tentative de login
-        try:
-            r = requests.post(
-                f"{base}{prefix}/auth/login",
-                json={"username": "patient1", "password": "Password123!"},
-                timeout=5
-            )
-            if r.status_code in (200, 201):
-                token = r.json().get("access_token") or r.json().get("token")
-                if token:
-                    st.session_state.token = token
-                    return token
-        except Exception:
-            pass
+        lang_instruction = f"Réponds impérativement dans la langue : {user_langue}."
+        formatted_messages = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n{lang_instruction}"}]
 
-        # 2. Si échec, tentative d'inscription auto
-        try:
-            r = requests.post(
-                f"{base}{prefix}/auth/register",
-                json={
-                    "username": "patient1",
-                    "password": "Password123!",
-                    "nom": "Patient",
-                    "prenom": "Demo",
-                    "consentement_rgpd": True
-                },
-                timeout=5
-            )
-            # Re-tentative de login
-            r2 = requests.post(
-                f"{base}{prefix}/auth/login",
-                json={"username": "patient1", "password": "Password123!"},
-                timeout=5
-            )
-            if r2.status_code in (200, 201):
-                token = r2.json().get("access_token") or r2.json().get("token")
-                if token:
-                    st.session_state.token = token
-                    return token
-        except Exception:
-            pass
+        for m in messages_history:
+            formatted_messages.append({
+                "role": "user" if m["role"] == "user" else "assistant",
+                "content": m["content"]
+            })
 
-    return "guest_valid_fallback"
+        models_to_try = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768"
+        ]
 
+        for model_id in models_to_try:
+            try:
+                completion = client.chat.completions.create(
+                    model=model_id,
+                    messages=formatted_messages,
+                    temperature=0.7,
+                    max_tokens=800,
+                )
+                return completion.choices[0].message.content.strip()
+            except Exception:
+                continue
 
-def get_local_expert_response(prompt: str, langue: str = "fr") -> str:
-    """Moteur médical de secours ultra-précis pour le diabète en RDC."""
-    p = prompt.lower()
+        return "Désolé, les serveurs d'IA sont momentanément occupés. Veuillez réessayer."
 
-    if "fufu" in p or "manger" in p or "nourriture" in p or "repas" in p or "pondu" in p:
-        if langue == "ln":
-            return (
-                "Na bokono bwa koni (diabète), fufu (kasa/masango) ezali na Glucides mingi. "
-                "Eza malamu okitisa ndambo ya fufu mpe obakisa ndunda mingi (pondu, ndunda) mpe mbingo (mbisi, nsoso)."
-            )
-        return (
-            "En cas de diabète, le fufu (manioc ou maïs) contient une forte quantité de glucides à rapide absorption.\n\n"
-            "💡 **Recommandations nutritionnelles :**\n"
-            "1. **Portions :** Réduisez la quantité de fufu (prenez une poignée moyenne).\n"
-            "2. **Accompagnement :** Associez-le avec beaucoup de légumes locaux (pondu, ndunda, lenga-lenga, saka-saka) et des protéines (poisson, poulet).\n"
-            "3. **Boissons :** Évitez les sodas et les jus sucrés pendant le repas."
-        )
-
-    elif "hypo" in p or "sucre" in p or "vertige" in p or "tremblement" in p:
-        return (
-            "🚨 **CONSEIL D'URGENCE HYPOGLYCÉMIE (Glycémie < 0.70 g/L) :**\n\n"
-            "Si vous ressentez des vertiges, sueurs ou tremblements :\n"
-            "1. **Règle des 15g :** Consommez immédiatement 3 morceaux de sucre de table dissous dans l'eau ou un demi-verre de boisson sucrée.\n"
-            "2. **Repos :** Reposez-vous pendant 15 minutes.\n"
-            "3. **Contrôle :** Recontrôlez votre glycémie. Si elle est toujours basse, reprenez du sucre."
-        )
-
-    elif "glycemie" in p or "surveiller" in p or "taux" in p or "normale" in p:
-        return (
-            "📊 **VALEURS CIBLES DE LA GLYCÉMIE (ADA / DiaBot-RDC) :**\n\n"
-            "• **À jeun (le matin au réveil) :** entre 0.70 g/L et 1.30 g/L (70 - 130 mg/dL).\n"
-            "• **Après les repas (2h après) :** inférieur à 1.80 g/L (180 mg/dL).\n\n"
-            "Notez vos résultats quotidiennement pour les présenter à votre médecin lors de votre prochaine consultation."
-        )
-
-    else:
-        return (
-            f"Merci pour votre question. En tant qu'assistant médical DiaBot-RDC, "
-            f"je vous conseille de maintenir une alimentation pauvre en sucres raffinés, "
-            f"de faire 30 minutes de marche par jour et de suivre régulièrement votre traitement antidiabétique."
-        )
+    except Exception as e:
+        return f"Erreur Groq API : {str(e)}"
 
 
 # Sidebar
@@ -417,12 +371,17 @@ with st.sidebar:
     lang = st.selectbox("lang_select", list(LANGUAGES.keys()), index=0, label_visibility="collapsed")
     st.session_state.langue = LANGUAGES[lang]
 
-    st.markdown('<div class="sidebar-label">👤 VOTRE NOM</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-label">👤 VOTRE PRÉNOM</div>', unsafe_allow_html=True)
     custom_name = st.text_input("Name", value=st.session_state.username, label_visibility="collapsed")
     if custom_name:
         st.session_state.username = custom_name
 
-    st.markdown("<div style='height:30px;'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-label">🔑 CLÉ API GROQ</div>', unsafe_allow_html=True)
+    user_key = st.text_input("Groq Key", value=st.session_state.groq_api_key, type="password", placeholder="gsk_...", label_visibility="collapsed")
+    if user_key:
+        st.session_state.groq_api_key = user_key
+
+    st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
     initial = (st.session_state.username or "P")[:1].upper()
     st.markdown(
         f"""
@@ -432,7 +391,7 @@ with st.sidebar:
                align-items:center;justify-content:center;font-weight:600;font-size:14px;">{initial}</div>
           <div>
             <div style="font-size:13px;font-weight:600;">{st.session_state.username}</div>
-            <div style="font-size:11px;color:#34a853;">● En ligne</div>
+            <div style="font-size:11px;color:#34a853;">● LLaMA-3.3 Actif</div>
           </div>
         </div>
         """,
@@ -440,7 +399,7 @@ with st.sidebar:
     )
 
 
-# Zone de Chat Principale
+# Zone de Chat
 if not st.session_state.messages:
     st.markdown(
         """
@@ -487,7 +446,7 @@ else:
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
-# Saisie Utilisateur
+# Saisie
 prompt = st.chat_input("Posez votre question sur le diabète…")
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
@@ -507,39 +466,14 @@ if prompt:
     box = st.empty()
     box.markdown(thinking_html, unsafe_allow_html=True)
 
-    token = get_jwt_token()
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"message": prompt, "langue": st.session_state.langue}
+    # Inférence directe Groq Cloud
+    reply = generate_groq_response(
+        st.session_state.messages,
+        st.session_state.langue,
+        st.session_state.groq_api_key
+    )
 
-    reply = None
-
-    # Tentative d'appel à l'API Render
-    endpoints = [
-        f"{RENDER_BASE_URL.rstrip('/')}/api/v1/ia/chat",
-        f"{RENDER_BASE_URL.rstrip('/')}/ia/chat",
-    ]
-
-    for ep in endpoints:
-        try:
-            res = requests.post(ep, json=payload, headers=headers, timeout=12)
-            if res.status_code in (200, 201):
-                data = res.json()
-                reply = (
-                    data.get("texte")
-                    or data.get("reponse")
-                    or data.get("message")
-                    or data.get("response")
-                )
-                if reply:
-                    break
-        except Exception:
-            pass
-
-    # Si l'API Render n'a pas répondu à temps, réponse de l'expert local
-    if not reply:
-        reply = get_local_expert_response(prompt, st.session_state.langue)
-
-    # Effet de streaming
+    # Streaming fluide du texte
     base = ['<div class="chat-wrap">']
     for m in st.session_state.messages:
         if m["role"] == "user":
@@ -565,7 +499,7 @@ if prompt:
                 + f'<div class="text-ai">{acc}</div></div></div>',
                 unsafe_allow_html=True,
             )
-            time.sleep(0.005)
+            time.sleep(0.004)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
     st.rerun()
