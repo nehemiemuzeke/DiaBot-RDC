@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 import os
 import time
 
@@ -17,14 +18,13 @@ LANGUAGES = {
     "Tshiluba": "lu",
 }
 
-SYSTEM_PROMPT = """Tu es DiaBot-RDC, un assistant médical intelligent et chaleureux spécialisé dans la gestion du diabète en République Démocratique du Congo (RDC).
+SYSTEM_PROMPT = """Tu es DiaBot-RDC, un assistant médical intelligent, empathique et chaleureux spécialisé dans la gestion du diabète en République Démocratique du Congo (RDC).
 
-DIRECTIVES STRICTES :
-1. Sois humain, empathique et naturel. Si l'utilisateur se présente (ex: "je m'appelle Néhémie"), salue-le chaleureusement par son prénom.
-2. Si la question concerne l'alimentation, adapte tes conseils au contexte congolais (fufu, pondu, saka-saka, madesu, chikwangue, bananes plantains, poisson).
-3. Donne des explications médicales claires, précises et simples à comprendre.
-4. En cas de symptômes graves ou d'hypoglycémie aiguë, rappelle la règle des 15g de sucre et recommande de consulter un médecin.
-5. Tu peux répondre en Français, Lingala, Swahili, Kikongo ou Tshiluba selon la langue choisie par l'utilisateur.
+DIRECTIVES IMPORTANTES :
+1. Sois humain, naturel et amical. Si l'utilisateur se présente ou te salue (ex: "je m'appelle Néhémie"), salue-le personnellement et chaleureusement par son prénom.
+2. Adapte tes conseils au contexte congolais (fufu, pondu, saka-saka, madesu, chikwangue, bananes plantains, poisson).
+3. Donne des conseils clairs, scientifiquement justes mais accessibles à tous.
+4. En cas d'urgence (hypoglycémie < 0.70 g/L), donne immédiatement la règle des 15g de sucre.
 """
 
 SVG_LOGO = """<svg width="36" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -63,13 +63,28 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
-#MainMenu, footer, header, .stDeployButton,
+/* Masquer les éléments inutiles SANS masquer le bouton d'ouverture de la Sidebar */
+#MainMenu, footer, .stDeployButton,
 [data-testid="stToolbar"], [data-testid="stDecoration"] {
   display: none !important;
 }
 
+/* Rendre le header transparent pour laisser voir le bouton flèche de la sidebar */
+[data-testid="stHeader"] {
+  background-color: transparent !important;
+  z-index: 100 !important;
+}
+
+/* Style du bouton d'ouverture/fermeture de la Sidebar */
+[data-testid="stHeader"] button {
+  color: var(--text) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+}
+
 .block-container {
-  padding-top: 1.5rem !important;
+  padding-top: 2rem !important;
   padding-bottom: 2rem !important;
   max-width: 100% !important;
 }
@@ -298,53 +313,73 @@ defaults = {
     "username": "Patient",
     "langue": "fr",
     "pending_prompt": None,
-    "groq_api_key": os.getenv("GROQ_API_KEY", ""),
+    "groq_key": os.getenv("GROQ_API_KEY", ""),
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 
-def generate_groq_response(messages_history, user_langue, api_key):
-    """Inférence directe via le SDK Groq avec le modèle LLaMA 3.3-70B."""
+def query_groq_api(messages_history, user_langue, api_key):
+    """Inférence REST directe vers Groq avec gestion d'erreurs claire."""
+    api_key = (api_key or "").strip()
+
     if not api_key:
-        return "⚠️ Clé API Groq manquante. Veuillez entrer votre clé GROQ dans le menu de gauche (Sidebar)."
+        return (
+            "⚠️ **Clé API Groq manquante !**\n\n"
+            "Pour discuter avec l'IA LLaMA 3.3, collez votre clé gratuite (commençant par `gsk_...`) "
+            "dans le champ **🔑 CLÉ API GROQ** dans le menu de gauche (Sidebar).\n\n"
+            "👉 Obtenez une clé gratuitement sur [console.groq.com/keys](https://console.groq.com/keys)."
+        )
 
-    try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-        lang_instruction = f"Réponds impérativement dans la langue : {user_langue}."
-        formatted_messages = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n{lang_instruction}"}]
+    lang_instruction = f"Réponds impérativement dans la langue : {user_langue}."
+    formatted_messages = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n{lang_instruction}"}]
 
-        for m in messages_history:
-            formatted_messages.append({
-                "role": "user" if m["role"] == "user" else "assistant",
-                "content": m["content"]
-            })
+    for m in messages_history:
+        formatted_messages.append({
+            "role": "user" if m["role"] == "user" else "assistant",
+            "content": m["content"]
+        })
 
-        models_to_try = [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768"
-        ]
+    models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768"
+    ]
 
-        for model_id in models_to_try:
-            try:
-                completion = client.chat.completions.create(
-                    model=model_id,
-                    messages=formatted_messages,
-                    temperature=0.7,
-                    max_tokens=800,
+    last_error = ""
+
+    for model_name in models:
+        payload = {
+            "model": model_name,
+            "messages": formatted_messages,
+            "temperature": 0.7,
+            "max_tokens": 800
+        }
+        try:
+            res = requests.post(url, json=payload, headers=headers, timeout=20)
+
+            if res.status_code == 200:
+                data = res.json()
+                return data["choices"][0]["message"]["content"].strip()
+            elif res.status_code == 401:
+                return (
+                    "❌ **Clé API Groq invalide (Erreur 401)**.\n\n"
+                    "Assurez-vous d'avoir copié la clé complète commençant par `gsk_` "
+                    "depuis [console.groq.com/keys](https://console.groq.com/keys)."
                 )
-                return completion.choices[0].message.content.strip()
-            except Exception:
-                continue
+            else:
+                last_error = f"Erreur {res.status_code}: {res.text}"
+        except Exception as e:
+            last_error = str(e)
 
-        return "Désolé, les serveurs d'IA sont momentanément occupés. Veuillez réessayer."
-
-    except Exception as e:
-        return f"Erreur Groq API : {str(e)}"
+    return f"⚠️ Problème de connexion avec Groq : {last_error}"
 
 
 # Sidebar
@@ -377,12 +412,15 @@ with st.sidebar:
         st.session_state.username = custom_name
 
     st.markdown('<div class="sidebar-label">🔑 CLÉ API GROQ</div>', unsafe_allow_html=True)
-    user_key = st.text_input("Groq Key", value=st.session_state.groq_api_key, type="password", placeholder="gsk_...", label_visibility="collapsed")
-    if user_key:
-        st.session_state.groq_api_key = user_key
+    input_key = st.text_input("Groq Key", value=st.session_state.groq_key, type="password", placeholder="gsk_...", label_visibility="collapsed")
+    if input_key:
+        st.session_state.groq_key = input_key
 
     st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
     initial = (st.session_state.username or "P")[:1].upper()
+    status_text = "● Clé configurée" if st.session_state.groq_key else "○ Entrez votre clé gsk_"
+    status_color = "#34a853" if st.session_state.groq_key else "#e57373"
+
     st.markdown(
         f"""
         <div style="display:flex;gap:10px;align-items:center;padding:12px;border:1px solid #2a2c31;
@@ -391,7 +429,7 @@ with st.sidebar:
                align-items:center;justify-content:center;font-weight:600;font-size:14px;">{initial}</div>
           <div>
             <div style="font-size:13px;font-weight:600;">{st.session_state.username}</div>
-            <div style="font-size:11px;color:#34a853;">● LLaMA-3.3 Actif</div>
+            <div style="font-size:11px;color:{status_color};">{status_text}</div>
           </div>
         </div>
         """,
@@ -446,7 +484,7 @@ else:
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
-# Saisie
+# Saisie Utilisateur
 prompt = st.chat_input("Posez votre question sur le diabète…")
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
@@ -466,14 +504,14 @@ if prompt:
     box = st.empty()
     box.markdown(thinking_html, unsafe_allow_html=True)
 
-    # Inférence directe Groq Cloud
-    reply = generate_groq_response(
+    # Inférence directe Groq REST API
+    reply = query_groq_api(
         st.session_state.messages,
         st.session_state.langue,
-        st.session_state.groq_api_key
+        st.session_state.groq_key
     )
 
-    # Streaming fluide du texte
+    # Effet de streaming
     base = ['<div class="chat-wrap">']
     for m in st.session_state.messages:
         if m["role"] == "user":
@@ -499,7 +537,7 @@ if prompt:
                 + f'<div class="text-ai">{acc}</div></div></div>',
                 unsafe_allow_html=True,
             )
-            time.sleep(0.004)
+            time.sleep(0.003)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
     st.rerun()
